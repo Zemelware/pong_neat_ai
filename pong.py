@@ -1,5 +1,8 @@
-import pygame
+import os
 import random
+
+import neat
+import pygame
 
 # Define some colors
 BLACK = (0, 0, 0)
@@ -58,7 +61,7 @@ class Ball:
 
 
 class Paddle:
-    def __init__(self, x, y, width, height, speed, up_key, down_key, score=0):
+    def __init__(self, x, y, width, height, speed, up_key, down_key, genome, neural_network, score=0):
         self.x = x
         self.y = y
         self.width = width
@@ -67,12 +70,29 @@ class Paddle:
         self.up_key = up_key
         self.down_key = down_key
         self.score = score
+        self.genome = genome
+        self.neural_network = neural_network
 
-    def update(self, keys):
+    def update(self, keys, ball, other_paddle):
         # Move the paddle based on the key pressed
-        if keys[self.up_key]:
+        # if keys[self.up_key]:
+        #     self.y -= self.speed
+        # if keys[self.down_key]:
+        #     self.y += self.speed
+
+        # Move the paddle based on the neural network
+        # The paddle will be able to see its y position and its distance from the ball
+        outputs = self.neural_network.activate(
+            (self.y, abs(self.y - ball.y), abs(self.x - ball.x)))
+        decision = outputs.index(max(outputs))
+
+        # If decision is 0, do nothing
+        # Move the paddle up or down depending on the output
+        if decision == 1:
+            # AI moves up
             self.y -= self.speed
-        if keys[self.down_key]:
+        elif decision == 2:
+            # AI moves down
             self.y += self.speed
 
         # Make sure the paddle doesn't go off the screen
@@ -83,8 +103,8 @@ class Paddle:
 
 
 def update_game_objects(keys, ball, paddle1, paddle2):
-    paddle1.update(keys)
-    paddle2.update(keys)
+    paddle1.update(keys, ball, paddle2)
+    paddle2.update(keys, ball, paddle1)
 
     ball.update()
 
@@ -99,13 +119,21 @@ def update_game_objects(keys, ball, paddle1, paddle2):
         ball.x_direction = -1
         ball.x_velocity = ball.speed * ball.x_direction
 
-    # Increase the score if a player scores
+    # Increase the score if a player scores. Return True breaks the loop in main() to start a new generation.
     if ball.x - ball.radius <= 0:
         ball.reset()
         paddle2.score += 1
+        paddle2.genome.fitness += 2
+        paddle1.genome.fitness -= 1
+
+        return True
     elif ball.x + ball.radius >= SCREEN_WIDTH:
         ball.reset()
         paddle1.score += 1
+        paddle1.genome.fitness += 2
+        paddle2.genome.fitness -= 1
+
+        return True
 
 
 def draw_game_objects(screen, font, ball, paddle1, paddle2):
@@ -136,7 +164,11 @@ def draw_game_objects(screen, font, ball, paddle1, paddle2):
     pygame.display.update()
 
 
-def play_game():
+def main_game_loop(genomes, config):
+
+    genomes[0][1].fitness = 0
+    genomes[1][1].fitness = 0
+
     pygame.init()
 
     font = pygame.font.Font(None, 70)
@@ -146,32 +178,49 @@ def play_game():
 
     paddle_x_offset = 20
     paddle1 = Paddle(paddle_x_offset, SCREEN_HEIGHT // 2 - PADDLE_HEIGHT // 2, PADDLE_WIDTH,
-                     PADDLE_HEIGHT, PADDLE_SPEED, pygame.K_w, pygame.K_s)
-    paddle2 = Paddle(SCREEN_WIDTH - PADDLE_WIDTH - paddle_x_offset, SCREEN_HEIGHT // 2 -
-                     PADDLE_HEIGHT // 2, PADDLE_WIDTH, PADDLE_HEIGHT, PADDLE_SPEED, pygame.K_UP, pygame.K_DOWN)
+                     PADDLE_HEIGHT, PADDLE_SPEED, pygame.K_w, pygame.K_s,
+                     genomes[0][1], neat.nn.FeedForwardNetwork.create(genomes[0][1], config))
+    paddle2 = Paddle(SCREEN_WIDTH - PADDLE_WIDTH - paddle_x_offset, SCREEN_HEIGHT // 2 - PADDLE_HEIGHT // 2, PADDLE_WIDTH,
+                     PADDLE_HEIGHT, PADDLE_SPEED, pygame.K_UP, pygame.K_DOWN,
+                     genomes[1][1], neat.nn.FeedForwardNetwork.create(genomes[1][1], config))
 
     clock = pygame.time.Clock()
 
     # Main game loop
-    while True:
+    run = True
+    while run:
 
         # Get quit event
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                break
+                run = False
+                pygame.quit()
+                quit()
 
         # Get pressed keys (returns the state of all keys)
         keys = pygame.key.get_pressed()
 
-        update_game_objects(keys, ball, paddle1, paddle2)
+        if update_game_objects(keys, ball, paddle1, paddle2):
+            run = False
 
         draw_game_objects(screen, font, ball, paddle1, paddle2)
 
         # Limit to 60 FPS
         clock.tick(FPS)
 
-    pygame.quit()
+
+def run(config_path):
+    config = neat.config.Config(neat.DefaultGenome, neat.DefaultReproduction,
+                                neat.DefaultSpeciesSet, neat.DefaultStagnation, config_path)
+    pop = neat.Population(config)
+
+    pop.add_reporter(neat.StdOutReporter(True))
+    pop.add_reporter(neat.StatisticsReporter())
+
+    winner = pop.run(main_game_loop, 200)
 
 
 if __name__ == '__main__':
-    play_game()
+    local_dir = os.path.dirname(__file__)
+    config_path = os.path.join(local_dir, 'neat_config.txt')
+    run(config_path)
